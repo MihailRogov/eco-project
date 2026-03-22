@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Эко-Платформа (Вариант 4)</title>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f7f0; padding: 20px; max-width: 1000px; margin: auto; color: #333; }
+        .card { background: white; padding: 20px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+        h1, h2, h3 { color: #2d5a2d; margin-top: 0; }
+        
+      
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+
+        
+        button { background: #4CAF50; color: white; padding: 10px 15px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: 0.3s; }
+        button:hover { background: #45a049; transform: translateY(-1px); }
+        input, select { padding: 10px; margin: 8px 0; width: 100%; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
+        
+        
+        .list-item { display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid #eee; }
+        .history-item { padding: 8px; border-left: 4px solid #4CAF50; background: #f9f9f9; margin-bottom: 5px; font-size: 0.85em; }
+        .leader-item { display: flex; justify-content: space-between; padding: 6px 10px; border-radius: 6px; margin-bottom: 3px; }
+        .current-user { background: #c8e6c9; font-weight: bold; border: 1px solid #4CAF50; }
+    </style>
+</head>
+<body>
+
+    <h1>🌿 Эко-Мониторинг</h1>
+
+    <!-- ПЕРЕКЛЮЧАТЕЛЬ ПОЛЬЗОВАТЕЛЕЙ -->
+    <div class="card" style="background: #e8f5e9; border: 1px solid #c8e6c9;">
+        <h3>👥 Сменить пользователя (для тестирования)</h3>
+        <p style="font-size: 0.9em; color: #666;">Выберите пользователя из базы, чтобы увидеть его статистику и достижения:</p>
+        <select id="userSwitcher" onchange="switchUser()"></select>
+    </div>
+
+    <div class="grid">
+        <!-- ЛЕВАЯ КОЛОНКА: ПРОФИЛЬ И РЕЙТИНГ -->
+        <div>
+            <div class="card">
+                <h2>👤 Профиль: <span id="userName">...</span></h2>
+                <div id="stats" style="font-size:1.1em; line-height:1.6;">Загрузка профиля...</div>
+            </div>
+
+            <div class="card">
+                <h3>🏆 Рейтинг экологов города</h3>
+                <div id="leaderboard">Загрузка рейтинга...</div>
+            </div>
+            
+            <div class="card">
+                <h3>📊 Моя статистика (Последние 5 сдач)</h3>
+                <div id="history">Загрузка истории...</div>
+            </div>
+        </div>
+
+        <!-- ПРАВАЯ КОЛОНКА: СДАТЬ МУСОР И УПРАВЛЕНИЕ -->
+        <div>
+            <div class="card">
+                <h2>♻️ Сдать отходы</h2>
+                <label>Пункт приема (ID):</label>
+                <input type="number" id="fPointId" placeholder="Введите ID из списка ниже">
+                <label>Тип отходов:</label>
+                <select id="fWasteId"></select>
+                <label>Вес (кг):</label>
+                <input type="number" id="fWeight" step="0.1" placeholder="Например: 1.5">
+                <button onclick="doDispose()" style="width: 100%; margin-top: 10px;">✅ Подтвердить сдачу</button>
+            </div>
+            <div class="card">
+                <h2>⚙️ Управление типами отходов</h2>
+                <div style="display:flex; gap:10px; margin-bottom: 10px;">
+                    <input type="text" id="newWName" placeholder="Название (напр. Картон)">
+                    <input type="number" id="newWValue" placeholder="Баллы за 1 кг">
+                    <button onclick="createWasteType()">➕ Добавить</button>
+                </div>
+                <div id="wastesList"></div>
+            </div>
+            <div class="card">
+                <h2>🛠 Управление пунктами</h2>
+                <input type="text" id="newPName" placeholder="Название нового пункта">
+                <input type="text" id="newPAddr" placeholder="Адрес">
+                <button onclick="createPoint()" style="width: 100%;">➕ Добавить пункт в базу</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ПОИСК И СПИСОК ПУНКТОВ -->
+    <div class="card">
+        <h2>📍 Поиск пунктов приема</h2>
+        <input type="text" id="search" onkeyup="renderPoints()" placeholder="Начните вводить название или адрес пункта...">
+        <div id="pointsList"></div>
+    </div>
+
+    <!-- ОБНОВЛЕННЫЙ СКРИПТ (ЛОГИКА) -->
+    <script>
+        const API = 'http://127.0.0.1:8080/api';
+        let currentUserId = 1; // По умолчанию загружаем первого пользователя
+        let allPoints = [];
+
+        // 1. Инициализация (загружается один раз при открытии страницы)
+        let wastes = []; // Массив для хранения типов отходов
+
+        async function init() {
+            const usersRes = await fetch(`${API}/users/all`);
+            const users = await usersRes.json();
+            document.getElementById('userSwitcher').innerHTML = users.map(u => `<option value="${u.id}">${u.name}</option>`).join('');
+            
+            await loadWastes(); // Загружаем типы отходов
+            refresh(); 
+        }
+
+        // Новая функция загрузки типов отходов
+        async function loadWastes() {
+            const wr = await fetch(`${API}/waste-types`);
+            wastes = await wr.json();
+            
+            // 1. Обновляем выпадающий список в форме сдачи
+            document.getElementById('fWasteId').innerHTML = wastes.map(w => `<option value="${w.id}">${w.name} (${w.eco_value_per_kg} б/кг)</option>`).join('');
+            
+            // 2. Рисуем список с кнопками удалить/обновить
+            document.getElementById('wastesList').innerHTML = wastes.map(w => `
+                <div class="list-item" style="padding: 5px; border-bottom: 1px solid #ddd;">
+                    <div><b>${w.name}</b> (${w.eco_value_per_kg} баллов/кг)</div>
+                    <div>
+                        <button style="background:#ffa500; padding:3px 8px;" onclick="editWasteType(${w.id})">✎</button>
+                        <button style="background:#ff4d4d; padding:3px 8px;" onclick="deleteWasteType(${w.id})">✖</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // 2. Обновление данных (вызывается при смене юзера или совершении действий)
+        async function refresh() {
+            // А) Данные профиля и Ранг (Достижения)
+            const ur = await fetch(`${API}/users/${currentUserId}/stats`);
+            const u = await ur.json();
+            document.getElementById('userName').innerText = u.name;
+            document.getElementById('stats').innerHTML = `Баллы: <b>${u.eco_points}</b><br>Достижение: <span style="color:#2d5a2d"><b>${u.achievement}</b></span>`;
+            
+            // Б) Статистика (История сдач)
+            const hr = await fetch(`${API}/users/${currentUserId}/history`);
+            const history = await hr.json();
+            document.getElementById('history').innerHTML = history.length ? history.map(h => `
+                <div class="history-item">
+                    <b>${h.weight_kg} кг</b> ${h.waste_name} <br>
+                    <small>📍 ${h.point_name} | 📅 ${new Date(h.report_date).toLocaleDateString()}</small>
+                </div>
+            `).join('') : "Истории сдач пока нет";
+
+            // В) Общий рейтинг (Leaderboard)
+            const lr = await fetch(`${API}/users/leaderboard`);
+            const leaders = await lr.json();
+            document.getElementById('leaderboard').innerHTML = leaders.map((l, idx) => `
+                <div class="leader-item ${l.name === u.name ? 'current-user' : ''}">
+                    <span>${idx + 1}. ${l.name}</span>
+                    <span>${l.eco_points} б.</span>
+                </div>
+            `).join('');
+
+            // Г) Пункты приема
+            const pr = await fetch(`${API}/points`);
+            allPoints = await pr.json();
+            renderPoints();
+        }
+
+        // 3. Функции интерфейса
+        function switchUser() {
+            currentUserId = document.getElementById('userSwitcher').value;
+            refresh();
+        }
+
+        function renderPoints() {
+            const query = document.getElementById('search').value.toLowerCase();
+            const filtered = allPoints.filter(p => p.name.toLowerCase().includes(query) || p.address.toLowerCase().includes(query));
+            document.getElementById('pointsList').innerHTML = filtered.map(p => `
+                <div class="list-item">
+                    <div><b>${p.name}</b> (ID: ${p.id})<br><small>${p.address}</small></div>
+                    <div>
+                        <button style="background:#ffa500; padding:5px 10px;" onclick="editPoint(${p.id})">✎</button>
+                        <button style="background:#ff4d4d; padding:5px 10px;" onclick="deletePoint(${p.id})">✖</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // 4. CRUD и Бизнес-логика
+        async function doDispose() {
+            const body = { 
+                userId: currentUserId, 
+                pointId: document.getElementById('fPointId').value, 
+                wasteTypeId: document.getElementById('fWasteId').value, 
+                weightKg: document.getElementById('fWeight').value 
+            };
+            if(!body.pointId || !body.weightKg) return alert("Заполните ID пункта и вес!");
+
+            const res = await fetch(`${API}/dispose`, { 
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' }, 
+                body: JSON.stringify(body) 
+            });
+            if(res.ok) { alert("Успешно! Ваш вклад рассчитан."); refresh(); }
+            else { alert("Ошибка! Проверьте правильность ID пункта."); }
+        }
+
+        async function createPoint() {
+            const name = document.getElementById('newPName').value;
+            const address = document.getElementById('newPAddr').value;
+            if(!name || !address) return alert("Заполните название и адрес!");
+            await fetch(`${API}/points`, { 
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' }, 
+                body: JSON.stringify({ name, address }) 
+            });
+            document.getElementById('newPName').value = '';
+            document.getElementById('newPAddr').value = '';
+            refresh();
+        }
+
+        async function deletePoint(id) {
+            if(confirm("Удалить пункт и все записи о сдачах в него?")) {
+                await fetch(`${API}/points/${id}`, { method: 'DELETE' });
+                refresh();
+            }
+        }
+
+        async function editPoint(id) {
+            const n = prompt("Новое название:");
+            const a = prompt("Новый адрес:");
+            if(n && a) {
+                await fetch(`${API}/points/${id}`, { 
+                    method: 'PUT', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ name: n, address: a }) 
+                });
+                refresh();
+            }
+        }
+        async function createWasteType() {
+            const name = document.getElementById('newWName').value;
+            const value = document.getElementById('newWValue').value;
+            if(!name || !value) return alert("Заполните все поля для нового типа отходов!");
+            
+            await fetch(`${API}/waste-types`, { 
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' }, 
+                body: JSON.stringify({ name: name, eco_value_per_kg: value }) 
+            });
+            
+            document.getElementById('newWName').value = '';
+            document.getElementById('newWValue').value = '';
+            
+            const wr = await fetch(`${API}/waste-types`);
+            const wastes = await wr.json();
+            document.getElementById('fWasteId').innerHTML = wastes.map(w => `<option value="${w.id}">${w.name} (${w.eco_value_per_kg} б/кг)</option>`).join('');
+            
+            alert("Новый тип отходов успешно добавлен!");
+}
+        async function createWasteType() {
+            const name = document.getElementById('newWName').value;
+            const value = document.getElementById('newWValue').value;
+            if(!name || !value) return alert("Заполните все поля!");
+            
+            await fetch(`${API}/waste-types`, { 
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' }, 
+                body: JSON.stringify({ name: name, eco_value_per_kg: value }) 
+            });
+            document.getElementById('newWName').value = '';
+            document.getElementById('newWValue').value = '';
+            await loadWastes(); // Перерисовываем список
+        }
+
+        async function deleteWasteType(id) {
+            if(confirm('Удалить этот тип отходов? Вся история его сдачи тоже удалится!')) {
+                await fetch(`${API}/waste-types/${id}`, { method: 'DELETE' });
+                await loadWastes(); // Перерисовываем список
+                refresh(); // Обновляем историю пользователя
+            }
+        }
+
+        async function editWasteType(id) {
+            const n = prompt('Новое название отхода:');
+            const v = prompt('Новое количество баллов за 1 кг:');
+            if(n && v) {
+                await fetch(`${API}/waste-types/${id}`, { 
+                    method: 'PUT', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ name: n, eco_value_per_kg: v }) 
+                });
+                await loadWastes(); // Перерисовываем список
+            }
+        }
+
+        // Запуск системы
+        init();
+    </script>
+</body>
+</html>
